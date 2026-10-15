@@ -80,6 +80,13 @@ class DeepFaceTimeout(Exception):
 def _timeout_handler(signum, frame):
     raise DeepFaceTimeout("DeepFace processing timed out")
 
+
+def _set_alarm_if_supported(seconds: int) -> None:
+    if hasattr(signal, "SIGALRM") and hasattr(signal, "alarm"):
+        if seconds > 0:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(seconds)
+
 load_dotenv()
 TURNSTILE_SECRET = os.getenv("TURNSTILE_SECRET", "").strip()
 TURNSTILE_ALLOWED_HOSTNAMES = {
@@ -126,20 +133,35 @@ IMAGE_SIGNATURES = {
     b'RIFF': "image/webp",
 }
 
-db_pool = pool.SimpleConnectionPool(
-    minconn=1,
-    maxconn=3,
-    host=os.getenv("DB_HOST"),
-    database=os.getenv("DB_NAME"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PASSWORD"),
-    port=os.getenv("DB_PORT")
-)
-print("[+] Database connection pool initialized (1-3 connections)")
+db_pool = None
+_vector_index_initialized = False
 
-def _ensure_vector_index():
+
+def get_db_pool():
+    global db_pool, _vector_index_initialized
+    if db_pool is None:
+        db_pool = pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=3,
+            host=os.getenv("DB_HOST"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            port=os.getenv("DB_PORT"),
+        )
+        print("[+] Database connection pool initialized (1-3 connections)")
+    if not _vector_index_initialized:
+        _ensure_vector_index(db_pool)
+        _vector_index_initialized = True
+    return db_pool
+
+
+def _ensure_vector_index(active_pool=None):
+    target_pool = active_pool or db_pool
+    if target_pool is None:
+        return
     try:
-        conn = db_pool.getconn()
+        conn = target_pool.getconn()
         cur = conn.cursor()
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_photo_embeddings_hnsw
@@ -149,12 +171,10 @@ def _ensure_vector_index():
         """)
         conn.commit()
         cur.close()
-        db_pool.putconn(conn)
+        target_pool.putconn(conn)
         print("[+] HNSW vector index verified/created on photo_embeddings.embedding")
     except Exception as e:
         print(f"[!] Could not create HNSW index (non-fatal): {e}")
-
-_ensure_vector_index()
 
 def _validate_image_bytes(content: bytes) -> bool:
     if len(content) < 12:
@@ -244,26 +264,25 @@ async def search_faces(request: Request, album_id: str = Form(...), file: Upload
             )
 
         try:
-            signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(DEEPFACE_TIMEOUT_SECS)
+            _set_alarm_if_supported(DEEPFACE_TIMEOUT_SECS)
             faces = DeepFace.represent(
                 img_path=temp_file.name,
                 model_name="GhostFaceNet",
                 detector_backend="retinaface",
                 enforce_detection=FACE_SEARCH_SELFIE_ENFORCE_DETECTION
             )
-            signal.alarm(0)
+            _set_alarm_if_supported(0)
         except DeepFaceTimeout:
-            signal.alarm(0)
+            _set_alarm_if_supported(0)
             return JSONResponse(
                 content={"error": "Face analysis timed out. Please try a clearer photo."},
                 status_code=408
             )
         except ValueError:
-            signal.alarm(0)
+            _set_alarm_if_supported(0)
             return JSONResponse(content={"error": "No face detected in selfie. Please try again."}, status_code=400)
         finally:
-            signal.alarm(0)
+            _set_alarm_if_supported(0)
 
         candidate_faces = [f for f in faces if f.get("embedding")]
         if not candidate_faces:
@@ -274,7 +293,8 @@ async def search_faces(request: Request, album_id: str = Form(...), file: Upload
             f["embedding"] for f in candidate_faces[:FACE_SEARCH_QUERY_MAX_FACES]
         ]
 
-        conn = db_pool.getconn()
+        active_pool = get_db_pool()
+        conn = active_pool.getconn()
         try:
             cur = conn.cursor()
 
@@ -309,7 +329,7 @@ async def search_faces(request: Request, album_id: str = Form(...), file: Upload
             ]
             cur.close()
         finally:
-            db_pool.putconn(conn)
+            active_pool.putconn(conn)
 
         photo_ids = [photo_id for photo_id, _ in results]
         

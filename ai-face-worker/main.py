@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 import signal
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -184,7 +185,8 @@ def process_message(
     finally:
         active_pool.putconn(conn)
 
-    local_path = f"temp_{photo_id}.jpg"
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(photo_id))
+    local_path = f"temp_{safe_id}.jpg"
     try:
         active_s3.download_file(BUCKET_NAME, storage_url, local_path)
 
@@ -210,7 +212,13 @@ def process_message(
         finally:
             _set_alarm_if_supported(0)
 
-        valid_faces = [f for f in faces if f.get("facial_area", {}).get("w", 0) > 0]
+        valid_faces = [
+            f
+            for f in faces
+            if f.get("facial_area", {}).get("w", 0) > 0
+            and f.get("facial_area", {}).get("h", 0) > 0
+            and f.get("embedding")
+        ]
 
         conn = active_pool.getconn()
         cur = conn.cursor()
