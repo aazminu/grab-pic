@@ -91,6 +91,8 @@ def test_process_message_persists_valid_faces_and_cleans_temp_file():
         return [
             {"embedding": [0.1, 0.2, 0.3], "facial_area": {"x": 10, "y": 20, "w": 50, "h": 60}},
             {"embedding": [0.0, 0.0, 0.0], "facial_area": {"x": 0, "y": 0, "w": 0, "h": 0}},  # invalid 0-width box
+            {"embedding": [0.4, 0.5, 0.6], "facial_area": {"x": 0, "y": 0, "w": 25, "h": 0}},  # invalid 0-height box
+            {"embedding": [], "facial_area": {"x": 0, "y": 0, "w": 25, "h": 25}},  # invalid empty embedding
         ]
 
     process_message(
@@ -119,3 +121,4 @@ def test_process_message_skips_deleted_photo():
     )
     assert len(pool.state["processed"]) == 0
     assert len(pool.state["embeddings"]) == 0
+
