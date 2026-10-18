@@ -266,3 +266,31 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def rank_embedding_matches(
+    query_vec: list[float],
+    candidates: list[dict],
+    threshold: float = 0.65,
+) -> list[dict]:
+    """Rank candidate face embeddings by L2-normalized cosine similarity above threshold."""
+    import math
+
+    q_norm = math.sqrt(sum(float(x) * float(x) for x in query_vec))
+    if q_norm <= 1e-12:
+        return []
+    ranked: list[dict] = []
+    for cand in candidates:
+        vec = cand.get("embedding") or []
+        if len(vec) != len(query_vec):
+            continue
+        c_norm = math.sqrt(sum(float(x) * float(x) for x in vec))
+        if c_norm <= 1e-12:
+            continue
+        sim = sum(float(a) * float(b) for a, b in zip(query_vec, vec)) / (q_norm * c_norm)
+        if sim >= threshold:
+            ranked.append({
+                "photo_id": cand.get("photo_id"),
+                "similarity": round(sim, 6),
+            })
+    ranked.sort(key=lambda item: item["similarity"], reverse=True)
+    return ranked
