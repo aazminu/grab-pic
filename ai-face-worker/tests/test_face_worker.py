@@ -122,3 +122,17 @@ def test_process_message_skips_deleted_photo():
     assert len(pool.state["processed"]) == 0
     assert len(pool.state["embeddings"]) == 0
 
+from main import rank_embedding_matches
+
+
+def test_rank_embedding_matches():
+    q = [1.0, 0.0, 0.0]
+    cands = [
+        {"photo_id": "p1", "embedding": [0.9, 0.1, 0.0]},
+        {"photo_id": "p2", "embedding": [0.0, 1.0, 0.0]},
+        {"photo_id": "p3", "embedding": [0.0, 0.0, 0.0]},
+    ]
+    matches = rank_embedding_matches(q, cands, threshold=0.7)
+    assert len(matches) == 1
+    assert matches[0]["photo_id"] == "p1"
+    assert matches[0]["similarity"] > 0.98
